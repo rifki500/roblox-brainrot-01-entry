@@ -1,88 +1,155 @@
--- A square that moves with the arrow keys inside a grey box.
+-- Snackrot Market: client HUD. Shows money, income, rebirths, the Snack Storm
+-- warning, a feed of game events and the rebirth button. All state comes from
+-- the server; the client never decides money or ownership itself.
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
-
-local ARENA_WIDTH = 640
-local ARENA_HEIGHT = 480
-local SQUARE_SIZE = 48
-local SPEED = 320 -- pixels per second
+local playerGui = player:WaitForChild("PlayerGui")
+local stateEvent = ReplicatedStorage.Events.StateUpdate
+local rebirthEvent = ReplicatedStorage.Events.Rebirth
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "GameGui"
+gui.Name = "SnackrotGui"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
+gui.Parent = playerGui
 
-local background = Instance.new("Frame")
-background.Name = "Background"
-background.Size = UDim2.fromScale(1, 1)
-background.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-background.BorderSizePixel = 0
-background.Parent = gui
+-- Money bar, top centre (kept clear of Roblox's own menu buttons top-left).
+local bar = Instance.new("Frame")
+bar.Name = "MoneyBar"
+bar.AnchorPoint = Vector2.new(0.5, 0)
+bar.Position = UDim2.new(0.5, 0, 0, 12)
+bar.Size = UDim2.fromOffset(420, 64)
+bar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+bar.BackgroundTransparency = 0.2
+bar.BorderSizePixel = 0
+bar.Parent = gui
+
+local moneyLabel = Instance.new("TextLabel")
+moneyLabel.Name = "Money"
+moneyLabel.Size = UDim2.new(1, 0, 0.6, 0)
+moneyLabel.BackgroundTransparency = 1
+moneyLabel.Text = "$0"
+moneyLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
+moneyLabel.TextScaled = true
+moneyLabel.Font = Enum.Font.SourceSansBold
+moneyLabel.Parent = bar
+
+local incomeLabel = Instance.new("TextLabel")
+incomeLabel.Name = "Income"
+incomeLabel.Position = UDim2.new(0, 0, 0.6, 0)
+incomeLabel.Size = UDim2.new(1, 0, 0.4, 0)
+incomeLabel.BackgroundTransparency = 1
+incomeLabel.Text = "$0/s  •  Rebirths: 0 (x1.0)"
+incomeLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+incomeLabel.TextScaled = true
+incomeLabel.Font = Enum.Font.SourceSans
+incomeLabel.Parent = bar
 
 local title = Instance.new("TextLabel")
-title.Name = "Hint"
-title.AnchorPoint = Vector2.new(0.5, 0)
-title.Position = UDim2.new(0.5, 0, 0.5, -ARENA_HEIGHT / 2 - 56)
-title.Size = UDim2.fromOffset(ARENA_WIDTH, 40)
+title.Name = "Title"
+title.AnchorPoint = Vector2.new(1, 0)
+title.Position = UDim2.new(1, -12, 0, 12)
+title.Size = UDim2.fromOffset(280, 40)
 title.BackgroundTransparency = 1
-title.Text = "Use the arrow keys to move the square"
-title.TextColor3 = Color3.fromRGB(230, 230, 230)
-title.TextSize = 24
-title.Font = Enum.Font.SourceSans
-title.Parent = background
+title.Text = "Snackrot Market"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextScaled = true
+title.Font = Enum.Font.SourceSansBold
+title.TextXAlignment = Enum.TextXAlignment.Right
+title.Parent = gui
 
-local arena = Instance.new("Frame")
-arena.Name = "Arena"
-arena.AnchorPoint = Vector2.new(0.5, 0.5)
-arena.Position = UDim2.fromScale(0.5, 0.5)
-arena.Size = UDim2.fromOffset(ARENA_WIDTH, ARENA_HEIGHT)
-arena.BackgroundColor3 = Color3.fromRGB(110, 110, 110)
-arena.BorderColor3 = Color3.fromRGB(30, 30, 30)
-arena.BorderSizePixel = 2
-arena.Parent = background
+local hint = Instance.new("TextLabel")
+hint.Name = "Hint"
+hint.AnchorPoint = Vector2.new(1, 0)
+hint.Position = UDim2.new(1, -12, 0, 52)
+hint.Size = UDim2.fromOffset(320, 24)
+hint.BackgroundTransparency = 1
+hint.Text = "Walk to a snackrot on the belt, hold E to buy it"
+hint.TextColor3 = Color3.fromRGB(220, 220, 220)
+hint.TextSize = 16
+hint.Font = Enum.Font.SourceSans
+hint.TextXAlignment = Enum.TextXAlignment.Right
+hint.Parent = gui
 
-local square = Instance.new("Frame")
-square.Name = "Square"
-square.Size = UDim2.fromOffset(SQUARE_SIZE, SQUARE_SIZE)
-square.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
-square.BorderColor3 = Color3.fromRGB(30, 30, 30)
-square.BorderSizePixel = 2
-square.Parent = arena
+-- Snack Storm warning, shown only while a storm is near.
+local wave = Instance.new("TextLabel")
+wave.Name = "WaveWarning"
+wave.AnchorPoint = Vector2.new(0.5, 0)
+wave.Position = UDim2.new(0.5, 0, 0, 88)
+wave.Size = UDim2.fromOffset(480, 36)
+wave.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+wave.BackgroundTransparency = 0.2
+wave.Text = ""
+wave.TextColor3 = Color3.fromRGB(255, 255, 255)
+wave.TextScaled = true
+wave.Font = Enum.Font.SourceSansBold
+wave.Visible = false
+wave.Parent = gui
 
--- The square's top-left corner inside the arena, starting in the middle.
-local x = (ARENA_WIDTH - SQUARE_SIZE) / 2
-local y = (ARENA_HEIGHT - SQUARE_SIZE) / 2
+-- Event feed, bottom left, newest first.
+local feed = Instance.new("Frame")
+feed.Name = "Feed"
+feed.AnchorPoint = Vector2.new(0, 1)
+feed.Position = UDim2.new(0, 12, 1, -12)
+feed.Size = UDim2.fromOffset(440, 110)
+feed.BackgroundTransparency = 1
+feed.Parent = gui
 
-local function place()
-	square.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
+local feedLines = {}
+local function addFeed(text)
+	table.insert(feedLines, 1, text)
+	if #feedLines > 4 then
+		table.remove(feedLines)
+	end
+	for _, child in ipairs(feed:GetChildren()) do
+		child:Destroy()
+	end
+	for i, line in ipairs(feedLines) do
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1, 0, 0, 24)
+		label.Position = UDim2.new(0, 0, 0, (i - 1) * 26)
+		label.BackgroundTransparency = 0.4
+		label.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+		label.Text = line
+		label.TextColor3 = Color3.fromRGB(240, 240, 240)
+		label.TextSize = 15
+		label.Font = Enum.Font.SourceSans
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.Parent = feed
+	end
 end
 
-place()
-gui.Parent = player:WaitForChild("PlayerGui")
+-- Rebirth button, bottom right.
+local rebirthBtn = Instance.new("TextButton")
+rebirthBtn.Name = "RebirthButton"
+rebirthBtn.AnchorPoint = Vector2.new(1, 1)
+rebirthBtn.Position = UDim2.new(1, -12, 1, -12)
+rebirthBtn.Size = UDim2.fromOffset(230, 52)
+rebirthBtn.BackgroundColor3 = Color3.fromRGB(150, 60, 200)
+rebirthBtn.Text = "Rebirth ($5,000)"
+rebirthBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+rebirthBtn.TextScaled = true
+rebirthBtn.Font = Enum.Font.SourceSansBold
+rebirthBtn.Parent = gui
 
-RunService.RenderStepped:Connect(function(dt)
-	local dx = 0
-	local dy = 0
-	if UserInputService:IsKeyDown(Enum.KeyCode.Left) then
-		dx -= 1
+rebirthBtn.MouseButton1Click:Connect(function()
+	rebirthEvent:FireServer()
+end)
+
+stateEvent.OnClientEvent:Connect(function(state)
+	moneyLabel.Text = "$" .. tostring(state.Money)
+	incomeLabel.Text = "$" .. tostring(state.Income) .. "/s  •  Rebirths: " .. tostring(state.Rebirths) .. " (x" .. string.format("%.1f", state.Multiplier) .. ")"
+	rebirthBtn.Text = "Rebirth ($" .. tostring(state.RebirthCost) .. ")"
+	if state.Feed and state.Feed ~= "" then
+		addFeed(state.Feed)
+		if string.find(state.Feed, "SNACK STORM in") then
+			wave.Text = state.Feed
+			wave.Visible = true
+		elseif string.find(state.Feed, "Storm has passed") then
+			wave.Visible = false
+		end
 	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.Right) then
-		dx += 1
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.Up) then
-		dy -= 1
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.Down) then
-		dy += 1
-	end
-	if dx == 0 and dy == 0 then
-		return
-	end
-	x = math.clamp(x + dx * SPEED * dt, 0, ARENA_WIDTH - SQUARE_SIZE)
-	y = math.clamp(y + dy * SPEED * dt, 0, ARENA_HEIGHT - SQUARE_SIZE)
-	place()
 end)
